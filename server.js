@@ -34,7 +34,7 @@ app.use((req, res, next) => {
 });
 
 // -----------------------------
-// STATIC IMAGES WITH VALIDATION
+// STATIC IMAGES
 // -----------------------------
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -111,19 +111,21 @@ async function adjustLessonSpaces(lessonIDs, increment = -1, session = null) {
 app.get("/", (req, res) => res.send("✅ Server is running!"));
 
 // -----------------------------
-// GET ALL LESSONS WITH SEARCH/FILTER
+// GET ALL LESSONS WITH SEARCH/FILTER AND SORT
 // -----------------------------
 app.get("/lessons", async (req, res) => {
   try {
-    const { title, minSpaces, date } = req.query;
+    const { title, minSpaces, date, sortBy, order } = req.query;
 
     const filter = {};
-
-    if (title) filter.title = { $regex: title, $options: "i" }; // case-insensitive search
+    if (title) filter.title = { $regex: title, $options: "i" };
     if (minSpaces) filter.spaces = { $gte: parseInt(minSpaces) };
     if (date) filter.date = date;
 
-    const lessons = await db.collection("lessons").find(filter).toArray();
+    const sort = {};
+    if (sortBy) sort[sortBy] = order === "desc" ? -1 : 1;
+
+    const lessons = await db.collection("lessons").find(filter).sort(sort).toArray();
     res.json(lessons);
   } catch (err) {
     console.error(err);
@@ -154,11 +156,15 @@ app.put("/lessons/:id", async (req, res) => {
 });
 
 // -----------------------------
-// GET ALL ORDERS
+// GET ALL ORDERS WITH SORT
 // -----------------------------
 app.get("/orders", async (req, res) => {
   try {
-    const orders = await db.collection("orders").find({}).toArray();
+    const { sortBy, order } = req.query;
+    const sort = {};
+    if (sortBy) sort[sortBy] = order === "desc" ? -1 : 1;
+
+    const orders = await db.collection("orders").find({}).sort(sort).toArray();
     res.json(orders);
   } catch (err) {
     console.error(err);
