@@ -134,6 +134,51 @@ app.get("/orders", async (req, res) => {
 });
 
 // -----------------------------
+// CREATE NEW ORDER
+// -----------------------------
+app.post("/orders", async (req, res) => {
+  try {
+    const { name, phone, lessonIDs, items } = req.body;
+
+    // Validate input
+    if (!name || !phone || !lessonIDs || !items || !items.length) {
+      return res.status(400).json({ error: "Missing fields" });
+    }
+
+    // Decrement spaces for each lesson atomically
+    for (let lessonId of lessonIDs) {
+      const result = await db.collection("lessons").findOneAndUpdate(
+        { _id: new ObjectId(lessonId), spaces: { $gt: 0 } },
+        { $inc: { spaces: -1 } },
+        { returnDocument: "after" }
+      );
+
+      if (!result.value) {
+        return res.status(400).json({ error: `Lesson ${lessonId} is fully booked` });
+      }
+    }
+
+    const orderPayload = {
+      name,
+      phone,
+      lessonIDs,
+      items,
+      createdAt: new Date()
+    };
+
+    const result = await db.collection("orders").insertOne(orderPayload);
+
+    res.status(201).json({
+      message: "Order created",
+      orderId: result.insertedId
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to create order" });
+  }
+});
+
+// -----------------------------
 // START SERVER
 // -----------------------------
 app.listen(PORT, () => {
