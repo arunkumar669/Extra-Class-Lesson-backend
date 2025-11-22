@@ -140,12 +140,10 @@ app.post("/orders", async (req, res) => {
   try {
     const { name, phone, lessonIDs, items } = req.body;
 
-    // Validate input
     if (!name || !phone || !lessonIDs || !items || !items.length) {
       return res.status(400).json({ error: "Missing fields" });
     }
 
-    // Decrement spaces for each lesson atomically
     for (let lessonId of lessonIDs) {
       const result = await db.collection("lessons").findOneAndUpdate(
         { _id: new ObjectId(lessonId), spaces: { $gt: 0 } },
@@ -175,6 +173,35 @@ app.post("/orders", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to create order" });
+  }
+});
+
+// -----------------------------
+// DELETE ORDER
+// -----------------------------
+app.delete("/orders/:id", async (req, res) => {
+  try {
+    const orderId = req.params.id;
+
+    // Find the order
+    const order = await db.collection("orders").findOne({ _id: new ObjectId(orderId) });
+    if (!order) return res.status(404).json({ error: "Order not found" });
+
+    // Restore lesson spaces
+    for (let lessonId of order.lessonIDs) {
+      await db.collection("lessons").updateOne(
+        { _id: new ObjectId(lessonId) },
+        { $inc: { spaces: 1 } }
+      );
+    }
+
+    // Delete the order
+    await db.collection("orders").deleteOne({ _id: new ObjectId(orderId) });
+
+    res.json({ message: "Order deleted and spaces restored" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to delete order" });
   }
 });
 
