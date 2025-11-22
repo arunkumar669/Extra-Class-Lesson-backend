@@ -31,6 +31,15 @@ app.use(cors());
 app.use(express.json());
 
 // -----------------------------
+// LOGGER MIDDLEWARE
+// -----------------------------
+app.use((req, res, next) => {
+  const now = new Date();
+  console.log(`[${now.toLocaleDateString()} ${now.toLocaleTimeString()}] ${req.method} → ${req.url}`);
+  next();
+});
+
+// -----------------------------
 // TEST ROUTE
 // -----------------------------
 app.get("/", (req, res) => {
