@@ -6,7 +6,7 @@ import cors from "cors";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
-import { MongoClient } from "mongodb";
+import { MongoClient, ObjectId } from "mongodb";
 
 // Load environment variables
 dotenv.config();
@@ -61,7 +61,7 @@ let db;
 async function connectDB() {
   try {
     await client.connect();
-    db = client.db("extra_class_lesson_db"); // Use your DB name
+    db = client.db("extra_class_lesson_db");
     console.log("✅ Connected to MongoDB Atlas");
   } catch (err) {
     console.error("❌ DB Connection Error:", err);
@@ -88,6 +88,36 @@ app.get("/lessons", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to fetch lessons" });
+  }
+});
+
+// -----------------------------
+// UPDATE LESSON
+// -----------------------------
+app.put("/lessons/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const updates = req.body;
+
+    // Optional: validate updates here to prevent invalid data
+    const allowedFields = ["title", "description", "spaces", "date", "price"];
+    const filteredUpdates = {};
+    for (let key of allowedFields) {
+      if (updates[key] !== undefined) filteredUpdates[key] = updates[key];
+    }
+
+    const result = await db.collection("lessons").findOneAndUpdate(
+      { _id: new ObjectId(id) },
+      { $set: filteredUpdates },
+      { returnDocument: "after" }
+    );
+
+    if (!result.value) return res.status(404).json({ error: "Lesson not found" });
+
+    res.json(result.value);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to update lesson" });
   }
 });
 
