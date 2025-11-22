@@ -99,7 +99,6 @@ app.put("/lessons/:id", async (req, res) => {
     const id = req.params.id;
     const updates = req.body;
 
-    // Optional: validate updates here to prevent invalid data
     const allowedFields = ["title", "description", "spaces", "date", "price"];
     const filteredUpdates = {};
     for (let key of allowedFields) {
@@ -118,6 +117,19 @@ app.put("/lessons/:id", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to update lesson" });
+  }
+});
+
+// -----------------------------
+// GET ALL ORDERS
+// -----------------------------
+app.get("/orders", async (req, res) => {
+  try {
+    const orders = await db.collection("orders").find({}).toArray();
+    res.json(orders);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch orders" });
   }
 });
 
