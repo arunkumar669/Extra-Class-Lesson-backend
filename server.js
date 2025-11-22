@@ -34,7 +34,7 @@ app.use((req, res, next) => {
 });
 
 // -----------------------------
-// STATIC IMAGES
+// STATIC IMAGES WITH VALIDATION
 // -----------------------------
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -110,9 +110,7 @@ async function adjustLessonSpaces(lessonIDs, increment = -1, session = null) {
 // -----------------------------
 app.get("/", (req, res) => res.send("✅ Server is running!"));
 
-// -----------------------------
-// GET ALL LESSONS WITH SEARCH/FILTER AND SORT
-// -----------------------------
+// GET lessons with search/filter/sort
 app.get("/lessons", async (req, res) => {
   try {
     const { title, minSpaces, date, sortBy, order } = req.query;
@@ -133,9 +131,7 @@ app.get("/lessons", async (req, res) => {
   }
 });
 
-// -----------------------------
-// UPDATE LESSON
-// -----------------------------
+// UPDATE lesson
 app.put("/lessons/:id", async (req, res) => {
   try {
     const updates = validateLessonUpdate(req.body);
@@ -155,9 +151,7 @@ app.put("/lessons/:id", async (req, res) => {
   }
 });
 
-// -----------------------------
-// GET ALL ORDERS WITH SORT
-// -----------------------------
+// GET orders with optional sorting
 app.get("/orders", async (req, res) => {
   try {
     const { sortBy, order } = req.query;
@@ -172,9 +166,7 @@ app.get("/orders", async (req, res) => {
   }
 });
 
-// -----------------------------
-// CREATE ORDER
-// -----------------------------
+// CREATE order with transaction
 app.post("/orders", async (req, res) => {
   const session = client.startSession();
   try {
@@ -197,9 +189,7 @@ app.post("/orders", async (req, res) => {
   }
 });
 
-// -----------------------------
-// DELETE ORDER
-// -----------------------------
+// DELETE order with transaction
 app.delete("/orders/:id", async (req, res) => {
   const session = client.startSession();
   try {
