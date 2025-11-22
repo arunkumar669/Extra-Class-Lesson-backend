@@ -5,10 +5,10 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import path from "path";
+import fs from "fs";
 import { fileURLToPath } from "url";
 import { MongoClient, ObjectId } from "mongodb";
 
-// Load environment variables
 dotenv.config();
 
 // -----------------------------
@@ -18,9 +18,6 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const MONGO_URI = process.env.MONGO_URI;
 
-// -----------------------------
-// ENV CHECKS
-// -----------------------------
 if (!MONGO_URI) {
   console.error("❌ MONGO_URI is missing in .env");
   process.exit(1);
@@ -31,25 +28,37 @@ if (!MONGO_URI) {
 // -----------------------------
 app.use(cors());
 app.use(express.json());
-
-// Logger middleware
 app.use((req, res, next) => {
-  const now = new Date();
-  console.log(`[${now.toLocaleDateString()} ${now.toLocaleTimeString()}] ${req.method} → ${req.url}`);
+  console.log(`[${new Date().toLocaleString()}] ${req.method} → ${req.url}`);
   next();
 });
 
 // -----------------------------
-// STATIC IMAGES
+// STATIC IMAGES WITH VALIDATION
 // -----------------------------
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const imagesPath = path.join(__dirname, "images");
 
-app.use("/images", express.static(imagesPath, {
-  extensions: ['jpg', 'png'],
-  fallthrough: false
-}));
+app.use("/images", async (req, res) => {
+  try {
+    const filePath = path.join(imagesPath, req.url);
+    const ext = path.extname(filePath).toLowerCase();
+
+    if (!['.jpg', '.jpeg', '.png'].includes(ext)) {
+      return res.status(400).json({ error: "Invalid image format" });
+    }
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "Image not found" });
+    }
+
+    res.sendFile(filePath);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to serve image" });
+  }
+});
 
 // -----------------------------
 // DATABASE CONNECTION
@@ -71,38 +80,50 @@ async function connectDB() {
 await connectDB();
 
 // -----------------------------
-// TEST ROUTE
-// -----------------------------
-app.get("/", (req, res) => {
-  res.send("✅ Server is running!");
-});
-
-// -----------------------------
-// VALIDATION HELPERS
+// HELPER FUNCTIONS
 // -----------------------------
 function validateLessonUpdate(data) {
   const allowedFields = ["title", "description", "spaces", "date", "price"];
-  const filteredUpdates = {};
-  for (let key of allowedFields) {
-    if (data[key] !== undefined) filteredUpdates[key] = data[key];
-  }
-  return filteredUpdates;
+  const filtered = {};
+  for (let key of allowedFields) if (data[key] !== undefined) filtered[key] = data[key];
+  return filtered;
 }
 
 function validateOrderData(data) {
   const { name, phone, lessonIDs, items } = data;
-  if (!name || !phone || !lessonIDs || !Array.isArray(lessonIDs) || !items || !Array.isArray(items) || !items.length) {
-    return false;
+  return name && phone && Array.isArray(lessonIDs) && Array.isArray(items) && items.length;
+}
+
+async function adjustLessonSpaces(lessonIDs, increment = -1, session = null) {
+  for (let lessonId of lessonIDs) {
+    const result = await db.collection("lessons").findOneAndUpdate(
+      { _id: new ObjectId(lessonId), ...(increment < 0 && { spaces: { $gt: 0 } }) },
+      { $inc: { spaces: increment } },
+      { returnDocument: "after", session }
+    );
+    if (increment < 0 && !result.value) throw new Error(`Lesson ${lessonId} is fully booked`);
   }
-  return true;
 }
 
 // -----------------------------
-// GET ALL LESSONS
+// ROUTES
+// -----------------------------
+app.get("/", (req, res) => res.send("✅ Server is running!"));
+
+// -----------------------------
+// GET ALL LESSONS WITH SEARCH/FILTER
 // -----------------------------
 app.get("/lessons", async (req, res) => {
   try {
-    const lessons = await db.collection("lessons").find({}).toArray();
+    const { title, minSpaces, date } = req.query;
+
+    const filter = {};
+
+    if (title) filter.title = { $regex: title, $options: "i" }; // case-insensitive search
+    if (minSpaces) filter.spaces = { $gte: parseInt(minSpaces) };
+    if (date) filter.date = date;
+
+    const lessons = await db.collection("lessons").find(filter).toArray();
     res.json(lessons);
   } catch (err) {
     console.error(err);
@@ -115,21 +136,16 @@ app.get("/lessons", async (req, res) => {
 // -----------------------------
 app.put("/lessons/:id", async (req, res) => {
   try {
-    const id = req.params.id;
     const updates = validateLessonUpdate(req.body);
-
-    if (!Object.keys(updates).length) {
-      return res.status(400).json({ error: "No valid fields to update" });
-    }
+    if (!Object.keys(updates).length) return res.status(400).json({ error: "No valid fields to update" });
 
     const result = await db.collection("lessons").findOneAndUpdate(
-      { _id: new ObjectId(id) },
+      { _id: new ObjectId(req.params.id) },
       { $set: updates },
       { returnDocument: "after" }
     );
 
     if (!result.value) return res.status(404).json({ error: "Lesson not found" });
-
     res.json(result.value);
   } catch (err) {
     console.error(err);
@@ -151,34 +167,18 @@ app.get("/orders", async (req, res) => {
 });
 
 // -----------------------------
-// CREATE NEW ORDER WITH TRANSACTION
+// CREATE ORDER
 // -----------------------------
 app.post("/orders", async (req, res) => {
   const session = client.startSession();
   try {
-    if (!validateOrderData(req.body)) {
-      return res.status(400).json({ error: "Invalid order data" });
-    }
-
+    if (!validateOrderData(req.body)) return res.status(400).json({ error: "Invalid order data" });
     const { name, phone, lessonIDs, items } = req.body;
     let orderId;
 
     await session.withTransaction(async () => {
-      // Decrement spaces for each lesson
-      for (let lessonId of lessonIDs) {
-        const result = await db.collection("lessons").findOneAndUpdate(
-          { _id: new ObjectId(lessonId), spaces: { $gt: 0 } },
-          { $inc: { spaces: -1 } },
-          { returnDocument: "after", session }
-        );
-
-        if (!result.value) {
-          throw new Error(`Lesson ${lessonId} is fully booked`);
-        }
-      }
-
-      const orderPayload = { name, phone, lessonIDs, items, createdAt: new Date() };
-      const result = await db.collection("orders").insertOne(orderPayload, { session });
+      await adjustLessonSpaces(lessonIDs, -1, session);
+      const result = await db.collection("orders").insertOne({ name, phone, lessonIDs, items, createdAt: new Date() }, { session });
       orderId = result.insertedId;
     });
 
@@ -192,27 +192,17 @@ app.post("/orders", async (req, res) => {
 });
 
 // -----------------------------
-// DELETE ORDER WITH TRANSACTION
+// DELETE ORDER
 // -----------------------------
 app.delete("/orders/:id", async (req, res) => {
   const session = client.startSession();
   try {
-    const orderId = req.params.id;
-
     await session.withTransaction(async () => {
-      const order = await db.collection("orders").findOne({ _id: new ObjectId(orderId) }, { session });
+      const order = await db.collection("orders").findOne({ _id: new ObjectId(req.params.id) }, { session });
       if (!order) throw new Error("Order not found");
 
-      // Restore spaces
-      for (let lessonId of order.lessonIDs) {
-        await db.collection("lessons").updateOne(
-          { _id: new ObjectId(lessonId) },
-          { $inc: { spaces: 1 } },
-          { session }
-        );
-      }
-
-      await db.collection("orders").deleteOne({ _id: new ObjectId(orderId) }, { session });
+      await adjustLessonSpaces(order.lessonIDs, 1, session);
+      await db.collection("orders").deleteOne({ _id: new ObjectId(req.params.id) }, { session });
     });
 
     res.json({ message: "Order deleted and spaces restored" });
@@ -227,6 +217,4 @@ app.delete("/orders/:id", async (req, res) => {
 // -----------------------------
 // START SERVER
 // -----------------------------
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
