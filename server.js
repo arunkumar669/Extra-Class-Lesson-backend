@@ -4,6 +4,8 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
 import { MongoClient } from "mongodb";
 
 // Load environment variables
@@ -30,14 +32,44 @@ if (!MONGO_URI) {
 app.use(cors());
 app.use(express.json());
 
-// -----------------------------
-// LOGGER MIDDLEWARE
-// -----------------------------
+// Logger middleware
 app.use((req, res, next) => {
   const now = new Date();
   console.log(`[${now.toLocaleDateString()} ${now.toLocaleTimeString()}] ${req.method} → ${req.url}`);
   next();
 });
+
+// -----------------------------
+// STATIC IMAGES
+// -----------------------------
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const imagesPath = path.join(__dirname, "images");
+
+// Serve images safely
+app.use("/images", express.static(imagesPath, {
+  extensions: ['jpg', 'png'],
+  fallthrough: false
+}));
+
+// -----------------------------
+// DATABASE CONNECTION
+// -----------------------------
+const client = new MongoClient(MONGO_URI);
+let db;
+
+async function connectDB() {
+  try {
+    await client.connect();
+    db = client.db("extra_class_lesson_db"); // Use your DB name
+    console.log("✅ Connected to MongoDB Atlas");
+  } catch (err) {
+    console.error("❌ DB Connection Error:", err);
+    process.exit(1);
+  }
+}
+
+await connectDB();
 
 // -----------------------------
 // TEST ROUTE
@@ -47,20 +79,17 @@ app.get("/", (req, res) => {
 });
 
 // -----------------------------
-// DATABASE CONNECTION
+// GET ALL LESSONS
 // -----------------------------
-const client = new MongoClient(MONGO_URI);
-async function connectDB() {
+app.get("/lessons", async (req, res) => {
   try {
-    await client.connect();
-    console.log("✅ Connected to MongoDB Atlas");
+    const lessons = await db.collection("lessons").find({}).toArray();
+    res.json(lessons);
   } catch (err) {
-    console.error("❌ DB Connection Error:", err);
-    process.exit(1);
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch lessons" });
   }
-}
-
-await connectDB(); // Top-level await works with ES modules
+});
 
 // -----------------------------
 // START SERVER
