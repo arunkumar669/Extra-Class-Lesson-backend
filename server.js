@@ -151,62 +151,76 @@ app.get("/orders", async (req, res) => {
 });
 
 // -----------------------------
-// CREATE NEW ORDER
+// CREATE NEW ORDER WITH TRANSACTION
 // -----------------------------
 app.post("/orders", async (req, res) => {
+  const session = client.startSession();
   try {
     if (!validateOrderData(req.body)) {
       return res.status(400).json({ error: "Invalid order data" });
     }
 
     const { name, phone, lessonIDs, items } = req.body;
+    let orderId;
 
-    // Decrement lesson spaces atomically
-    for (let lessonId of lessonIDs) {
-      const result = await db.collection("lessons").findOneAndUpdate(
-        { _id: new ObjectId(lessonId), spaces: { $gt: 0 } },
-        { $inc: { spaces: -1 } },
-        { returnDocument: "after" }
-      );
+    await session.withTransaction(async () => {
+      // Decrement spaces for each lesson
+      for (let lessonId of lessonIDs) {
+        const result = await db.collection("lessons").findOneAndUpdate(
+          { _id: new ObjectId(lessonId), spaces: { $gt: 0 } },
+          { $inc: { spaces: -1 } },
+          { returnDocument: "after", session }
+        );
 
-      if (!result.value) {
-        return res.status(400).json({ error: `Lesson ${lessonId} is fully booked` });
+        if (!result.value) {
+          throw new Error(`Lesson ${lessonId} is fully booked`);
+        }
       }
-    }
 
-    const orderPayload = { name, phone, lessonIDs, items, createdAt: new Date() };
-    const result = await db.collection("orders").insertOne(orderPayload);
+      const orderPayload = { name, phone, lessonIDs, items, createdAt: new Date() };
+      const result = await db.collection("orders").insertOne(orderPayload, { session });
+      orderId = result.insertedId;
+    });
 
-    res.status(201).json({ message: "Order created", orderId: result.insertedId });
+    res.status(201).json({ message: "Order created", orderId });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Failed to create order" });
+    res.status(400).json({ error: err.message || "Failed to create order" });
+  } finally {
+    await session.endSession();
   }
 });
 
 // -----------------------------
-// DELETE ORDER
+// DELETE ORDER WITH TRANSACTION
 // -----------------------------
 app.delete("/orders/:id", async (req, res) => {
+  const session = client.startSession();
   try {
     const orderId = req.params.id;
 
-    const order = await db.collection("orders").findOne({ _id: new ObjectId(orderId) });
-    if (!order) return res.status(404).json({ error: "Order not found" });
+    await session.withTransaction(async () => {
+      const order = await db.collection("orders").findOne({ _id: new ObjectId(orderId) }, { session });
+      if (!order) throw new Error("Order not found");
 
-    for (let lessonId of order.lessonIDs) {
-      await db.collection("lessons").updateOne(
-        { _id: new ObjectId(lessonId) },
-        { $inc: { spaces: 1 } }
-      );
-    }
+      // Restore spaces
+      for (let lessonId of order.lessonIDs) {
+        await db.collection("lessons").updateOne(
+          { _id: new ObjectId(lessonId) },
+          { $inc: { spaces: 1 } },
+          { session }
+        );
+      }
 
-    await db.collection("orders").deleteOne({ _id: new ObjectId(orderId) });
+      await db.collection("orders").deleteOne({ _id: new ObjectId(orderId) }, { session });
+    });
 
     res.json({ message: "Order deleted and spaces restored" });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "Failed to delete order" });
+    res.status(400).json({ error: err.message || "Failed to delete order" });
+  } finally {
+    await session.endSession();
   }
 });
 
