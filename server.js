@@ -46,7 +46,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const imagesPath = path.join(__dirname, "images");
 
-// Serve images safely
 app.use("/images", express.static(imagesPath, {
   extensions: ['jpg', 'png'],
   fallthrough: false
@@ -79,6 +78,26 @@ app.get("/", (req, res) => {
 });
 
 // -----------------------------
+// VALIDATION HELPERS
+// -----------------------------
+function validateLessonUpdate(data) {
+  const allowedFields = ["title", "description", "spaces", "date", "price"];
+  const filteredUpdates = {};
+  for (let key of allowedFields) {
+    if (data[key] !== undefined) filteredUpdates[key] = data[key];
+  }
+  return filteredUpdates;
+}
+
+function validateOrderData(data) {
+  const { name, phone, lessonIDs, items } = data;
+  if (!name || !phone || !lessonIDs || !Array.isArray(lessonIDs) || !items || !Array.isArray(items) || !items.length) {
+    return false;
+  }
+  return true;
+}
+
+// -----------------------------
 // GET ALL LESSONS
 // -----------------------------
 app.get("/lessons", async (req, res) => {
@@ -97,17 +116,15 @@ app.get("/lessons", async (req, res) => {
 app.put("/lessons/:id", async (req, res) => {
   try {
     const id = req.params.id;
-    const updates = req.body;
+    const updates = validateLessonUpdate(req.body);
 
-    const allowedFields = ["title", "description", "spaces", "date", "price"];
-    const filteredUpdates = {};
-    for (let key of allowedFields) {
-      if (updates[key] !== undefined) filteredUpdates[key] = updates[key];
+    if (!Object.keys(updates).length) {
+      return res.status(400).json({ error: "No valid fields to update" });
     }
 
     const result = await db.collection("lessons").findOneAndUpdate(
       { _id: new ObjectId(id) },
-      { $set: filteredUpdates },
+      { $set: updates },
       { returnDocument: "after" }
     );
 
@@ -138,12 +155,13 @@ app.get("/orders", async (req, res) => {
 // -----------------------------
 app.post("/orders", async (req, res) => {
   try {
-    const { name, phone, lessonIDs, items } = req.body;
-
-    if (!name || !phone || !lessonIDs || !items || !items.length) {
-      return res.status(400).json({ error: "Missing fields" });
+    if (!validateOrderData(req.body)) {
+      return res.status(400).json({ error: "Invalid order data" });
     }
 
+    const { name, phone, lessonIDs, items } = req.body;
+
+    // Decrement lesson spaces atomically
     for (let lessonId of lessonIDs) {
       const result = await db.collection("lessons").findOneAndUpdate(
         { _id: new ObjectId(lessonId), spaces: { $gt: 0 } },
@@ -156,20 +174,10 @@ app.post("/orders", async (req, res) => {
       }
     }
 
-    const orderPayload = {
-      name,
-      phone,
-      lessonIDs,
-      items,
-      createdAt: new Date()
-    };
-
+    const orderPayload = { name, phone, lessonIDs, items, createdAt: new Date() };
     const result = await db.collection("orders").insertOne(orderPayload);
 
-    res.status(201).json({
-      message: "Order created",
-      orderId: result.insertedId
-    });
+    res.status(201).json({ message: "Order created", orderId: result.insertedId });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Failed to create order" });
@@ -183,11 +191,9 @@ app.delete("/orders/:id", async (req, res) => {
   try {
     const orderId = req.params.id;
 
-    // Find the order
     const order = await db.collection("orders").findOne({ _id: new ObjectId(orderId) });
     if (!order) return res.status(404).json({ error: "Order not found" });
 
-    // Restore lesson spaces
     for (let lessonId of order.lessonIDs) {
       await db.collection("lessons").updateOne(
         { _id: new ObjectId(lessonId) },
@@ -195,7 +201,6 @@ app.delete("/orders/:id", async (req, res) => {
       );
     }
 
-    // Delete the order
     await db.collection("orders").deleteOne({ _id: new ObjectId(orderId) });
 
     res.json({ message: "Order deleted and spaces restored" });
